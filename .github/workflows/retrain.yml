@@ -1,10 +1,12 @@
 name: Retrain Water Forecast Model
+
 permissions:
   contents: write
+
 on:
   schedule:
-    - cron: '*/5 * * * *'   # Every day at 00:00 UTC
-  #workflow_dispatch:      # Allow manual retraining
+    - cron: '*/5 * * * *'   # Every 5 minutes
+  workflow_dispatch:        # Also allow manual retraining
 
 jobs:
   retrain:
@@ -26,10 +28,12 @@ jobs:
         run: |
           python retrain_forecast.py
 
-      - name: Commit forecast.json
+      - name: Commit and Push forecast.json
         run: |
           git config --global user.name 'github-actions'
           git config --global user.email 'github-actions@github.com'
           git add forecast.json
           git commit -m "Automated forecast update [skip ci]" || echo "No changes to commit"
-          git push
+          git pull --rebase origin main
+          git push origin main
+
