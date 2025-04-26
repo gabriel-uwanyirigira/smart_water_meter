@@ -35,18 +35,21 @@ def fetch_thingspeak_data(channel_id, api_key, inlet_field, outlet_field):
     df = pd.DataFrame(records)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df = df.set_index('timestamp')
+    print(f"Fetched {len(df)} records from ThingSpeak.")  # Debug: Print number of records fetched
     return df
 
 # === 2a. Aggregate to daily usage ===
 def aggregate_daily(df):
     df['net_flow'] = df['inlet_flow'] - df['outlet_flow']
     daily_usage = df['net_flow'].resample('D').sum() * (1/60)  # to liters/hour
+    print(f"Aggregated {len(daily_usage)} daily records.")  # Debug: Print number of daily records
     return daily_usage.dropna()
 
 # === 2b. Aggregate to hourly usage ===
 def aggregate_hourly(df):
     df['net_flow'] = df['inlet_flow'] - df['outlet_flow']
     hourly_usage = df['net_flow'].resample('H').sum() * (1/60)  # to liters/hour
+    print(f"Aggregated {len(hourly_usage)} hourly records.")  # Debug: Print number of hourly records
     return hourly_usage.dropna()
 
 # === 3. Prepare data for LSTM/GRU ===
@@ -88,7 +91,7 @@ def train_and_forecast_daily(daily_series):
     X_train, y_train = X[:split_index], y[:split_index]
     
     model = build_lstm_model(WINDOW_SIZE)
-    model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=0)
+    model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=1)  # Debug: Verbose for training info
 
     forecast_input = daily_series.values[-WINDOW_SIZE:]
     forecasted = []
@@ -98,6 +101,7 @@ def train_and_forecast_daily(daily_series):
         forecasted.append(next_val)
         forecast_input = np.append(forecast_input, next_val)
 
+    print("Daily forecast predictions:", forecasted)  # Debug: Print the forecasted values
     return forecasted
 
 # === 5b. Train and forecast hourly usage ===
@@ -109,7 +113,7 @@ def train_and_forecast_hourly(hourly_series):
     X_train, y_train = X[:split_index], y[:split_index]
     
     model = build_gru_model(WINDOW_SIZE)
-    model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=0)
+    model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=1)  # Debug: Verbose for training info
 
     forecast_input = hourly_series.values[-WINDOW_SIZE:]
     forecasted = []
@@ -119,6 +123,7 @@ def train_and_forecast_hourly(hourly_series):
         forecasted.append(next_val)
         forecast_input = np.append(forecast_input, next_val)
 
+    print("Hourly forecast predictions:", forecasted)  # Debug: Print the forecasted values
     return forecasted
 
 # === 6. Save forecast into JSON ===
@@ -142,7 +147,11 @@ def save_forecast_json(daily_forecast, hourly_forecast):
 
     with open(FORECAST_JSON_FILE, "w") as f:
         json.dump(result, f, indent=4)
+    
     print(f"Saved forecast to {FORECAST_JSON_FILE}")
+    # Check if file is being saved properly
+    with open(FORECAST_JSON_FILE, "r") as f:
+        print("Updated forecast.json:", json.load(f))  # Print the file contents to check if it's updated
 
 # === MAIN FUNCTION ===
 def main():
