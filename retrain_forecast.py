@@ -30,7 +30,7 @@ def fetch_data():
         return []
 
 def preprocess_data(feeds):
-    print("Aggregating hourly and minutely usage...")
+    print("Preparing second-based flow data...")
     df = pd.DataFrame(feeds)
     df['created_at'] = pd.to_datetime(df['created_at'])
     df.set_index('created_at', inplace=True)
@@ -40,12 +40,10 @@ def preprocess_data(feeds):
     
     df['net_flow'] = df[INLET_FIELD] - df[OUTLET_FIELD]
     
-    hourly_usage = df['net_flow'].resample('h').sum() * (1/60)  # to liters/minute
-    minutely_usage = df['net_flow'].resample('min').sum() * (1/60)  # to liters/second
+    second_usage = df['net_flow'].resample('S').sum()  # 'S' for second
+    print(f"Aggregated {len(second_usage)} second-based records.")
     
-    print(f"Aggregated {len(hourly_usage)} hourly records.")
-    print(f"Aggregated {len(minutely_usage)} minutely records.")
-    return hourly_usage, minutely_usage
+    return second_usage
 
 def create_sequences(data, seq_length):
     X, y = [], []
@@ -54,101 +52,70 @@ def create_sequences(data, seq_length):
         y.append(data[i + seq_length])
     return np.array(X), np.array(y)
 
-def train_and_forecast_hourly(hourly_series):
-    print("Training LSTM for hourly forecast...")
-    data = hourly_series.values
+def train_and_forecast_seconds(second_series):
+    print("Training LSTM for second-based forecast...")
+    data = second_series.values
     data = data.reshape(-1, 1)
-    
+
     scaler = MinMaxScaler()
     scaled_data = scaler.fit_transform(data)
-    
-    seq_length = 24  # 24 hours
+
+    seq_length = 60  # use past 60 seconds for prediction
 
     X, y = create_sequences(scaled_data, seq_length)
     X = X.reshape((X.shape[0], X.shape[1], 1))
-    
+
     model = Sequential()
     model.add(LSTM(50, activation='relu', input_shape=(seq_length, 1)))
     model.add(Dense(1))
     model.compile(optimizer='adam', loss='mse')
-    
-    model.fit(X, y, epochs=30, batch_size=8, verbose=1)
-    
+
+    model.fit(X, y, epochs=10, batch_size=16, verbose=1)
+
     last_seq = scaled_data[-seq_length:]
     last_seq = last_seq.reshape((1, seq_length, 1))
-    
+
     prediction_scaled = model.predict(last_seq)
     prediction = scaler.inverse_transform(prediction_scaled)
-    
+
     return prediction.flatten()[0]
 
-def train_and_forecast_minutely(minutely_series):
-    print("Training LSTM for minutely forecast...")
-    data = minutely_series.values
-    data = data.reshape(-1, 1)
-    
-    scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(data)
-    
-    seq_length = 60  # 60 minutes
-
-    X, y = create_sequences(scaled_data, seq_length)
-    X = X.reshape((X.shape[0], X.shape[1], 1))
-    
-    model = Sequential()
-    model.add(LSTM(50, activation='relu', input_shape=(seq_length, 1)))
-    model.add(Dense(1))
-    model.compile(optimizer='adam', loss='mse')
-    
-    model.fit(X, y, epochs=30, batch_size=8, verbose=1)
-    
-    last_seq = scaled_data[-seq_length:]
-    last_seq = last_seq.reshape((1, seq_length, 1))
-    
-    prediction_scaled = model.predict(last_seq)
-    prediction = scaler.inverse_transform(prediction_scaled)
-    
-    return prediction.flatten()[0]
-
-def save_forecasts(hourly_forecast, minutely_forecast):
-    print("Saving forecasts to forecast.json...")
+def save_forecast(second_forecast):
+    print("Saving forecast to forecast.json...")
     forecast = {
-        "hourly_forecast": hourly_forecast,
-        "minutely_forecast": minutely_forecast,
+        "second_forecast": second_forecast,
         "timestamp": datetime.utcnow().isoformat()
     }
     with open('forecast.json', 'w') as f:
         json.dump(forecast, f, indent=4)
-    print("Forecasts saved to forecast.json")
+    print("Forecast saved to forecast.json.")
 
 def main():
     feeds = fetch_data()
     if feeds:
-        hourly_series, minutely_series = preprocess_data(feeds)
-        
-        # Drop NaNs after resampling
-        hourly_series = hourly_series.dropna()
-        minutely_series = minutely_series.dropna()
+        second_series = preprocess_data(feeds)
+        second_series = second_series.dropna()
 
-        if len(hourly_series) >= 30 and len(minutely_series) >= 100:
-            hourly_forecast = train_and_forecast_hourly(hourly_series)
-            minutely_forecast = train_and_forecast_minutely(minutely_series)
-            save_forecasts(hourly_forecast, minutely_forecast)
+        if len(second_series) >= 100:
+            second_forecast = train_and_forecast_seconds(second_series)
+            save_forecast(second_forecast)
         else:
-            print("Not enough data to train models. Skipping training... Waiting for more data.")
-            save_forecasts(None, None)
+            print("Not enough data to train the model. Skipping training...")
+            save_forecast(None)
     else:
         print("No data to process.")
 
 # === INFINITE RETRAINING LOOP EVERY 5 MINUTES ===
 if __name__ == "__main__":
     while True:
+        start_time = time.time()
+        print(f"\n--- New cycle at {datetime.utcnow().isoformat()} ---")
         try:
-            print(f"\n--- Running new retraining cycle at {datetime.utcnow().isoformat()} ---")
             main()
         except Exception as e:
             print(f"Error occurred: {e}")
 
-        # Sleep exactly 5 minutes
-        print("\nSleeping for 5 minutes...\n")
-        time.sleep(300)  # 300 seconds = 5 minutes
+        elapsed_time = time.time() - start_time
+        sleep_time = max(0, 300 - elapsed_time)  # 5 minutes minus time taken
+        print(f"\nSleeping for {sleep_time:.2f} seconds...\n")
+        time.sleep(sleep_time)
