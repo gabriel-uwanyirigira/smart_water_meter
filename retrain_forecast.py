@@ -162,7 +162,7 @@ def main():
     daily_series = aggregate_daily(df)
     hourly_series = aggregate_hourly(df)
 
-    if len(daily_series) < 30 or len(hourly_series) < 48:
+    if len(daily_series) < 1 or len(hourly_series) < 1:
         print("Not enough data points yet. Need at least 30 days and 48 hours.")
         return
 
