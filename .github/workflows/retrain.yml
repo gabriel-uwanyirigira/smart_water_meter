@@ -1,41 +1,41 @@
-name: Retrain Water Forecast Model
+name: 📈 Water Flow LSTM Forecast & Push
 
 permissions:
   contents: write
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # Every 5 minutes
-  workflow_dispatch:       # Also allow manual retraining
+    - cron: '*/5 * * * *'   # every 5 minutes
+  workflow_dispatch:
 
 jobs:
   retrain:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.9
+          python-version: '3.10'
 
-      - name: Install Dependencies
-        run: |
-          # Install all dependencies from requirements.txt
-          pip install -r requirements.txt
+      - name: Install system dependencies
+        run: sudo apt-get install -y python3-dev python3-pip libcupti-dev
 
-      - name: Run Retraining Script
+      - name: Install Python dependencies
         run: |
-          python retrain_forecast.py
+          pip install tensorflow==2.10.0 scikit-learn pandas requests "numpy<2.0.0"
 
-      - name: Commit and Push forecast.json
+      - name: Run retraining script
+        run: python retrain_forecast.py
+
+      - name: Commit and push forecast
         run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'github-actions@github.com'
-          git pull --rebase origin main || true  # Pull latest changes safely
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
           git add forecast.json
-          git add requirements.txt
-          git commit -m "Automated forecast update [skip ci]" || echo "No changes to commit"
-          git push origin main
+          git commit -m "🔄 Auto-update water forecast" || echo "No changes to commit"
+          git pull --rebase origin main
+          git push https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/your-username/your-repo.git HEAD:main
