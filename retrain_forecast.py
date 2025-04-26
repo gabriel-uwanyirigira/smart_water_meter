@@ -15,7 +15,7 @@ READ_API_KEY = 'JMHIQT5X1F9HCM95'
 INLET_FIELD = 'field1'
 OUTLET_FIELD = 'field2'
 FORECAST_PATH = 'forecast.json'
-NUM_RESULTS = 8000
+NUM_RESULTS = 2000
 SEQUENCE_LENGTH = 60  # 60 seconds history
 
 # === Fetch sensor data ===
