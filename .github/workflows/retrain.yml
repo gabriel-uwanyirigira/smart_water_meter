@@ -1,5 +1,6 @@
 name: Retrain Water Forecast Model
-
+permissions:
+  contents: write
 on:
   schedule:
     - cron: '*/5 * * * *'   # Every day at 00:00 UTC
