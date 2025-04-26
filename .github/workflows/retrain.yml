@@ -38,4 +38,4 @@ jobs:
           git add forecast.json
           git commit -m "🔄 Auto-update water forecast" || echo "No changes to commit"
           git pull --rebase origin main
-          git push https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/your-username/your-repo.git HEAD:main
+          git push https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/gabriel-uwanyirigira/smart_water_meter.git HEAD:main
