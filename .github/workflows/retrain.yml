@@ -1,0 +1,34 @@
+name: Retrain Water Forecast Model
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # Every day at 00:00 UTC
+  workflow_dispatch:      # Allow manual retraining
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Install Dependencies
+        run: |
+          pip install pandas numpy tensorflow requests
+
+      - name: Run retraining script
+        run: |
+          python retrain_forecast.py
+
+      - name: Commit forecast.json
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@github.com'
+          git add forecast.json
+          git commit -m "Automated forecast update [skip ci]" || echo "No changes to commit"
+          git push
