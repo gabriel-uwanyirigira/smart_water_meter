@@ -10,7 +10,7 @@ THINGSPEAK_CHANNEL_ID = "2501725"
 THINGSPEAK_API_KEY    = "JMHIQT5X1F9HCM95"
 INLET_FIELD           = "field1"  # Inlet flow rate field
 OUTLET_FIELD          = "field2"  # Outlet flow rate field
-NUM_DAYS_FORECAST     = 7
+NUM_HOURS_FORECAST    = 7
 FORECAST_JSON_FILE    = "forecast.json"
 
 # === 1. Fetch latest data from ThingSpeak ===
@@ -38,19 +38,19 @@ def fetch_thingspeak_data(channel_id, api_key, inlet_field, outlet_field):
     print(f"Fetched {len(df)} records from ThingSpeak.")  # Debug: Print number of records fetched
     return df
 
-# === 2a. Aggregate to daily usage ===
-def aggregate_daily(df):
-    df['net_flow'] = df['inlet_flow'] - df['outlet_flow']
-    daily_usage = df['net_flow'].resample('D').sum() * (1/60)  # to liters/hour
-    print(f"Aggregated {len(daily_usage)} daily records.")  # Debug: Print number of daily records
-    return daily_usage.dropna()
-
-# === 2b. Aggregate to hourly usage ===
+# === 2a. Aggregate to hourly usage ===
 def aggregate_hourly(df):
     df['net_flow'] = df['inlet_flow'] - df['outlet_flow']
-    hourly_usage = df['net_flow'].resample('H').sum() * (1/60)  # to liters/hour
+    hourly_usage = df['net_flow'].resample('H').sum() * (1/60)  # to liters/minute
     print(f"Aggregated {len(hourly_usage)} hourly records.")  # Debug: Print number of hourly records
     return hourly_usage.dropna()
+
+# === 2b. Aggregate to minutely usage ===
+def aggregate_minutely(df):
+    df['net_flow'] = df['inlet_flow'] - df['outlet_flow']
+    minutely_usage = df['net_flow'].resample('T').sum() * (1/60)  # to liters/second
+    print(f"Aggregated {len(minutely_usage)} minutely records.")  # Debug: Print number of minutely records
+    return minutely_usage.dropna()
 
 # === 3. Prepare data for LSTM/GRU ===
 def prepare_data(series, window_size):
@@ -62,7 +62,7 @@ def prepare_data(series, window_size):
     y = np.array(y)
     return X[..., np.newaxis], y
 
-# === 4a. Build LSTM Model for daily prediction ===
+# === 4a. Build LSTM Model for hourly prediction ===
 def build_lstm_model(window_size):
     model = tf.keras.Sequential([
         tf.keras.layers.LSTM(64, activation='relu', input_shape=(window_size, 1)),
@@ -72,7 +72,7 @@ def build_lstm_model(window_size):
     model.compile(optimizer='adam', loss='mse')
     return model
 
-# === 4b. Build GRU Model for hourly prediction ===
+# === 4b. Build GRU Model for minutely prediction ===
 def build_gru_model(window_size):
     model = tf.keras.Sequential([
         tf.keras.layers.GRU(64, activation='relu', input_shape=(window_size, 1)),
@@ -82,10 +82,10 @@ def build_gru_model(window_size):
     model.compile(optimizer='adam', loss='mse')
     return model
 
-# === 5a. Train and forecast daily usage ===
-def train_and_forecast_daily(daily_series):
+# === 5a. Train and forecast hourly usage ===
+def train_and_forecast_hourly(hourly_series):
     WINDOW_SIZE = 7
-    X, y = prepare_data(daily_series.values, window_size=WINDOW_SIZE)
+    X, y = prepare_data(hourly_series.values, window_size=WINDOW_SIZE)
 
     split_index = int(0.8 * len(X))
     X_train, y_train = X[:split_index], y[:split_index]
@@ -93,31 +93,9 @@ def train_and_forecast_daily(daily_series):
     model = build_lstm_model(WINDOW_SIZE)
     model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=1)  # Debug: Verbose for training info
 
-    forecast_input = daily_series.values[-WINDOW_SIZE:]
-    forecasted = []
-    for _ in range(7):
-        input_seq = np.expand_dims(forecast_input[-WINDOW_SIZE:], axis=(0,2))
-        next_val = model.predict(input_seq)[0,0]
-        forecasted.append(next_val)
-        forecast_input = np.append(forecast_input, next_val)
-
-    print("Daily forecast predictions:", forecasted)  # Debug: Print the forecasted values
-    return forecasted
-
-# === 5b. Train and forecast hourly usage ===
-def train_and_forecast_hourly(hourly_series):
-    WINDOW_SIZE = 24
-    X, y = prepare_data(hourly_series.values, window_size=WINDOW_SIZE)
-
-    split_index = int(0.8 * len(X))
-    X_train, y_train = X[:split_index], y[:split_index]
-    
-    model = build_gru_model(WINDOW_SIZE)
-    model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=1)  # Debug: Verbose for training info
-
     forecast_input = hourly_series.values[-WINDOW_SIZE:]
     forecasted = []
-    for _ in range(24):
+    for _ in range(7):
         input_seq = np.expand_dims(forecast_input[-WINDOW_SIZE:], axis=(0,2))
         next_val = model.predict(input_seq)[0,0]
         forecasted.append(next_val)
@@ -126,23 +104,47 @@ def train_and_forecast_hourly(hourly_series):
     print("Hourly forecast predictions:", forecasted)  # Debug: Print the forecasted values
     return forecasted
 
-# === 6. Save forecast into JSON ===
-def save_forecast_json(daily_forecast, hourly_forecast):
-    today = datetime.utcnow().date()
-    daily_forecast_dict = {}
-    hourly_forecast_dict = {}
+# === 5b. Train and forecast minutely usage ===
+def train_and_forecast_minutely(minutely_series):
+    WINDOW_SIZE = 60
+    X, y = prepare_data(minutely_series.values, window_size=WINDOW_SIZE)
 
-    for i, prediction in enumerate(daily_forecast):
-        forecast_date = today + timedelta(days=i+1)
-        daily_forecast_dict[str(forecast_date)] = round(float(prediction), 2)
+    split_index = int(0.8 * len(X))
+    X_train, y_train = X[:split_index], y[:split_index]
+    
+    model = build_gru_model(WINDOW_SIZE)
+    model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=1)  # Debug: Verbose for training info
+
+    forecast_input = minutely_series.values[-WINDOW_SIZE:]
+    forecasted = []
+    for _ in range(60):
+        input_seq = np.expand_dims(forecast_input[-WINDOW_SIZE:], axis=(0,2))
+        next_val = model.predict(input_seq)[0,0]
+        forecasted.append(next_val)
+        forecast_input = np.append(forecast_input, next_val)
+
+    print("Minutely forecast predictions:", forecasted)  # Debug: Print the forecasted values
+    return forecasted
+
+# === 6. Save forecast into JSON ===
+def save_forecast_json(hourly_forecast, minutely_forecast):
+    now = datetime.utcnow()
+    hourly_forecast_dict = {}
+    minutely_forecast_dict = {}
 
     for i, prediction in enumerate(hourly_forecast):
-        hour_label = f"{i:02d}:00"
+        forecast_time = now + timedelta(hours=i+1)
+        hour_label = forecast_time.strftime("%Y-%m-%d %H:00")
         hourly_forecast_dict[hour_label] = round(float(prediction), 2)
 
+    for i, prediction in enumerate(minutely_forecast):
+        forecast_time = now + timedelta(minutes=i+1)
+        minute_label = forecast_time.strftime("%Y-%m-%d %H:%M")
+        minutely_forecast_dict[minute_label] = round(float(prediction), 2)
+
     result = {
-        "daily_forecast": daily_forecast_dict,
-        "hourly_forecast": hourly_forecast_dict
+        "hourly_forecast": hourly_forecast_dict,
+        "minutely_forecast": minutely_forecast_dict
     }
 
     with open(FORECAST_JSON_FILE, "w") as f:
@@ -158,22 +160,22 @@ def main():
     print("Fetching data from ThingSpeak...")
     df = fetch_thingspeak_data(THINGSPEAK_CHANNEL_ID, THINGSPEAK_API_KEY, INLET_FIELD, OUTLET_FIELD)
 
-    print("Aggregating daily and hourly usage...")
-    daily_series = aggregate_daily(df)
+    print("Aggregating hourly and minutely usage...")
     hourly_series = aggregate_hourly(df)
+    minutely_series = aggregate_minutely(df)
 
-    if len(daily_series) < 1 or len(hourly_series) < 1:
-        print("Not enough data points yet. Need at least 30 days and 48 hours.")
+    if len(hourly_series) < 1 or len(minutely_series) < 1:
+        print("Not enough data points yet. Need at least 30 hours and 60 minutes.")
         return
 
-    print("Training LSTM for daily forecast...")
-    daily_forecast = train_and_forecast_daily(daily_series)
-
-    print("Training GRU for hourly forecast...")
+    print("Training LSTM for hourly forecast...")
     hourly_forecast = train_and_forecast_hourly(hourly_series)
 
+    print("Training GRU for minutely forecast...")
+    minutely_forecast = train_and_forecast_minutely(minutely_series)
+
     print("Saving forecast...")
-    save_forecast_json(daily_forecast, hourly_forecast)
+    save_forecast_json(hourly_forecast, minutely_forecast)
 
 if __name__ == "__main__":
     main()
