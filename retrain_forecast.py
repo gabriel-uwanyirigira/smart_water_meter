@@ -1,181 +1,145 @@
-import requests
 import pandas as pd
 import numpy as np
-import tensorflow as tf
+import requests
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+import tensorflow as tf
 
 # === CONFIGURATION ===
-THINGSPEAK_CHANNEL_ID = "2501725"
-THINGSPEAK_API_KEY    = "JMHIQT5X1F9HCM95"
-INLET_FIELD           = "field1"  # Inlet flow rate field
-OUTLET_FIELD          = "field2"  # Outlet flow rate field
-NUM_HOURS_FORECAST    = 7
-FORECAST_JSON_FILE    = "forecast.json"
+THINGSPEAK_CHANNEL_ID = "2501725"  # ✅ updated
+THINGSPEAK_API_KEY    = "JMHIQT5X1F9HCM95"  # ✅ updated
 
-# === 1. Fetch latest data from ThingSpeak ===
-def fetch_thingspeak_data(channel_id, api_key, inlet_field, outlet_field):
-    url = f"https://api.thingspeak.com/channels/{channel_id}/feeds.json?api_key={api_key}&results=10000"
-    response = requests.get(url)
-    data = response.json()
-    
-    feeds = data['feeds']
-    records = []
-    for entry in feeds:
-        timestamp = entry['created_at']
-        inlet = entry.get(inlet_field)
-        outlet = entry.get(outlet_field)
-        if inlet is not None and outlet is not None:
-            try:
-                inlet = float(inlet)
-                outlet = float(outlet)
-                records.append({"timestamp": timestamp, "inlet_flow": inlet, "outlet_flow": outlet})
-            except:
-                continue
-    df = pd.DataFrame(records)
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df = df.set_index('timestamp')
-    print(f"Fetched {len(df)} records from ThingSpeak.")  # Debug: Print number of records fetched
-    return df
+# ThingSpeak Fields
+INLET_FIELD = "field1"  # ✅ updated
+OUTLET_FIELD = "field2"  # ✅ updated
 
-# === 2a. Aggregate to hourly usage ===
-def aggregate_hourly(df):
-    df['net_flow'] = df['inlet_flow'] - df['outlet_flow']
-    hourly_usage = df['net_flow'].resample('H').sum() * (1/60)  # to liters/minute
-    print(f"Aggregated {len(hourly_usage)} hourly records.")  # Debug: Print number of hourly records
-    return hourly_usage.dropna()
-
-# === 2b. Aggregate to minutely usage ===
-def aggregate_minutely(df):
-    df['net_flow'] = df['inlet_flow'] - df['outlet_flow']
-    minutely_usage = df['net_flow'].resample('T').sum() * (1/60)  # to liters/second
-    print(f"Aggregated {len(minutely_usage)} minutely records.")  # Debug: Print number of minutely records
-    return minutely_usage.dropna()
-
-# === 3. Prepare data for LSTM/GRU ===
-def prepare_data(series, window_size):
-    X, y = [], []
-    for i in range(len(series) - window_size):
-        X.append(series[i:i+window_size])
-        y.append(series[i+window_size])
-    X = np.array(X)
-    y = np.array(y)
-    return X[..., np.newaxis], y
-
-# === 4a. Build LSTM Model for hourly prediction ===
-def build_lstm_model(window_size):
-    model = tf.keras.Sequential([
-        tf.keras.layers.LSTM(64, activation='relu', input_shape=(window_size, 1)),
-        tf.keras.layers.Dense(32, activation='relu'),
-        tf.keras.layers.Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mse')
-    return model
-
-# === 4b. Build GRU Model for minutely prediction ===
-def build_gru_model(window_size):
-    model = tf.keras.Sequential([
-        tf.keras.layers.GRU(64, activation='relu', input_shape=(window_size, 1)),
-        tf.keras.layers.Dense(32, activation='relu'),
-        tf.keras.layers.Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mse')
-    return model
-
-# === 5a. Train and forecast hourly usage ===
-def train_and_forecast_hourly(hourly_series):
-    WINDOW_SIZE = 7
-    X, y = prepare_data(hourly_series.values, window_size=WINDOW_SIZE)
-
-    split_index = int(0.8 * len(X))
-    X_train, y_train = X[:split_index], y[:split_index]
-    
-    model = build_lstm_model(WINDOW_SIZE)
-    model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=1)  # Debug: Verbose for training info
-
-    forecast_input = hourly_series.values[-WINDOW_SIZE:]
-    forecasted = []
-    for _ in range(7):
-        input_seq = np.expand_dims(forecast_input[-WINDOW_SIZE:], axis=(0,2))
-        next_val = model.predict(input_seq)[0,0]
-        forecasted.append(next_val)
-        forecast_input = np.append(forecast_input, next_val)
-
-    print("Hourly forecast predictions:", forecasted)  # Debug: Print the forecasted values
-    return forecasted
-
-# === 5b. Train and forecast minutely usage ===
-def train_and_forecast_minutely(minutely_series):
-    WINDOW_SIZE = 60
-    X, y = prepare_data(minutely_series.values, window_size=WINDOW_SIZE)
-
-    split_index = int(0.8 * len(X))
-    X_train, y_train = X[:split_index], y[:split_index]
-    
-    model = build_gru_model(WINDOW_SIZE)
-    model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=1)  # Debug: Verbose for training info
-
-    forecast_input = minutely_series.values[-WINDOW_SIZE:]
-    forecasted = []
-    for _ in range(60):
-        input_seq = np.expand_dims(forecast_input[-WINDOW_SIZE:], axis=(0,2))
-        next_val = model.predict(input_seq)[0,0]
-        forecasted.append(next_val)
-        forecast_input = np.append(forecast_input, next_val)
-
-    print("Minutely forecast predictions:", forecasted)  # Debug: Print the forecasted values
-    return forecasted
-
-# === 6. Save forecast into JSON ===
-def save_forecast_json(hourly_forecast, minutely_forecast):
-    now = datetime.utcnow()
-    hourly_forecast_dict = {}
-    minutely_forecast_dict = {}
-
-    for i, prediction in enumerate(hourly_forecast):
-        forecast_time = now + timedelta(hours=i+1)
-        hour_label = forecast_time.strftime("%Y-%m-%d %H:00")
-        hourly_forecast_dict[hour_label] = round(float(prediction), 2)
-
-    for i, prediction in enumerate(minutely_forecast):
-        forecast_time = now + timedelta(minutes=i+1)
-        minute_label = forecast_time.strftime("%Y-%m-%d %H:%M")
-        minutely_forecast_dict[minute_label] = round(float(prediction), 2)
-
-    result = {
-        "hourly_forecast": hourly_forecast_dict,
-        "minutely_forecast": minutely_forecast_dict
-    }
-
-    with open(FORECAST_JSON_FILE, "w") as f:
-        json.dump(result, f, indent=4)
-    
-    print(f"Saved forecast to {FORECAST_JSON_FILE}")
-    # Check if file is being saved properly
-    with open(FORECAST_JSON_FILE, "r") as f:
-        print("Updated forecast.json:", json.load(f))  # Print the file contents to check if it's updated
-
-# === MAIN FUNCTION ===
-def main():
+def fetch_data():
     print("Fetching data from ThingSpeak...")
-    df = fetch_thingspeak_data(THINGSPEAK_CHANNEL_ID, THINGSPEAK_API_KEY, INLET_FIELD, OUTLET_FIELD)
+    url = f'https://api.thingspeak.com/channels/{THINGSPEAK_CHANNEL_ID}/feeds.json?api_key={THINGSPEAK_API_KEY}&results=8000'
+    response = requests.get(url)
+    if response.status_code == 200:
+        feeds = response.json()['feeds']
+        print(f"Fetched {len(feeds)} records from ThingSpeak.")
+        return feeds
+    else:
+        print(f"Failed to fetch data: {response.status_code}")
+        return []
 
+def preprocess_data(feeds):
     print("Aggregating hourly and minutely usage...")
-    hourly_series = aggregate_hourly(df)
-    minutely_series = aggregate_minutely(df)
+    df = pd.DataFrame(feeds)
+    df['created_at'] = pd.to_datetime(df['created_at'])
+    df.set_index('created_at', inplace=True)
+    
+    df[INLET_FIELD] = pd.to_numeric(df[INLET_FIELD], errors='coerce')
+    df[OUTLET_FIELD] = pd.to_numeric(df[OUTLET_FIELD], errors='coerce')
+    
+    df['net_flow'] = df[INLET_FIELD] - df[OUTLET_FIELD]
+    
+    hourly_usage = df['net_flow'].resample('h').sum() * (1/60)  # to liters/minute
+    minutely_usage = df['net_flow'].resample('min').sum() * (1/60)  # to liters/second
+    
+    print(f"Aggregated {len(hourly_usage)} hourly records.")
+    print(f"Aggregated {len(minutely_usage)} minutely records.")
+    return hourly_usage, minutely_usage
 
-    if len(hourly_series) < 1 or len(minutely_series) < 1:
-        print("Not enough data points yet. Need at least 30 hours and 60 minutes.")
-        return
+def create_sequences(data, seq_length):
+    X, y = [], []
+    for i in range(len(data) - seq_length):
+        X.append(data[i:i + seq_length])
+        y.append(data[i + seq_length])
+    return np.array(X), np.array(y)
 
+def train_and_forecast_hourly(hourly_series):
     print("Training LSTM for hourly forecast...")
-    hourly_forecast = train_and_forecast_hourly(hourly_series)
+    data = hourly_series.values
+    data = data.reshape(-1, 1)
+    
+    scaler = MinMaxScaler()
+    scaled_data = scaler.fit_transform(data)
+    
+    seq_length = 24  # Using 24 hours for sequence
+    
+    X, y = create_sequences(scaled_data, seq_length)
+    X = X.reshape((X.shape[0], X.shape[1], 1))
+    
+    model = Sequential()
+    model.add(LSTM(50, activation='relu', input_shape=(seq_length, 1)))
+    model.add(Dense(1))
+    model.compile(optimizer='adam', loss='mse')
+    
+    model.fit(X, y, epochs=50, batch_size=8, verbose=1)
+    
+    last_seq = scaled_data[-seq_length:]
+    last_seq = last_seq.reshape((1, seq_length, 1))
+    
+    prediction_scaled = model.predict(last_seq)
+    prediction = scaler.inverse_transform(prediction_scaled)
+    
+    return prediction.flatten()[0]
 
-    print("Training GRU for minutely forecast...")
-    minutely_forecast = train_and_forecast_minutely(minutely_series)
+def train_and_forecast_minutely(minutely_series):
+    print("Training LSTM for minutely forecast...")
+    data = minutely_series.values
+    data = data.reshape(-1, 1)
+    
+    scaler = MinMaxScaler()
+    scaled_data = scaler.fit_transform(data)
+    
+    seq_length = 60  # Using 60 minutes for sequence
+    
+    X, y = create_sequences(scaled_data, seq_length)
+    X = X.reshape((X.shape[0], X.shape[1], 1))
+    
+    model = Sequential()
+    model.add(LSTM(50, activation='relu', input_shape=(seq_length, 1)))
+    model.add(Dense(1))
+    model.compile(optimizer='adam', loss='mse')
+    
+    model.fit(X, y, epochs=50, batch_size=8, verbose=1)
+    
+    last_seq = scaled_data[-seq_length:]
+    last_seq = last_seq.reshape((1, seq_length, 1))
+    
+    prediction_scaled = model.predict(last_seq)
+    prediction = scaler.inverse_transform(prediction_scaled)
+    
+    return prediction.flatten()[0]
 
-    print("Saving forecast...")
-    save_forecast_json(hourly_forecast, minutely_forecast)
+def save_forecasts(hourly_forecast, minutely_forecast):
+    print("Saving forecasts...")
+    forecast = {
+        "hourly_forecast": hourly_forecast,
+        "minutely_forecast": minutely_forecast,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    with open('forecast.json', 'w') as f:
+        json.dump(forecast, f, indent=4)
+    print("Forecasts saved to forecast.json")
+
+def main():
+    feeds = fetch_data()
+    if feeds:
+        hourly_series, minutely_series = preprocess_data(feeds)
+        
+        # Drop NaNs after resampling
+        hourly_series = hourly_series.dropna()
+        minutely_series = minutely_series.dropna()
+
+        if len(hourly_series) >= 30 and len(minutely_series) >= 100:  # Ensure enough data
+            hourly_forecast = train_and_forecast_hourly(hourly_series)
+            minutely_forecast = train_and_forecast_minutely(minutely_series)
+            save_forecasts(hourly_forecast, minutely_forecast)
+        else:
+            print("Not enough data to train models. Skipping training... Waiting for more data.")
+            # Continue running and check periodically for updated data
+            save_forecasts(None, None)  # You may choose to save a null forecast for now if needed.
+
+    else:
+        print("No data to process.")
 
 if __name__ == "__main__":
     main()
