@@ -1,6 +1,6 @@
 {
   "timestamp": "2025-05-03T10:20:55.903551Z",
-  "is_anomaly": false,
-  "reconstruction_loss": NaN,
+  "is_anomaly": True,
+  "reconstruction_loss": Pipe A - Sector 3,
   "note": "Anomaly = possible leak or unknown water usage"
 }
