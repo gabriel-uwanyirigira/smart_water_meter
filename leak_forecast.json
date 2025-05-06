@@ -1,6 +1,6 @@
 {
-  "timestamp": "2025-05-06T06:55:23.918052Z",
+  "timestamp": "2025-05-06T08:28:43.583906Z",
   "is_anomaly": false,
-  "reconstruction_loss": 8.7e-05,
+  "reconstruction_loss": NaN,
   "note": "Anomaly = possible leak or unknown water usage"
 }
